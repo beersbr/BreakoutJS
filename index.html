@@ -1,0 +1,485 @@
+<html>
+<head>
+<title>Dust</title>
+
+<link rel="stylesheet" href="./stylesheets/index.css" media="all">
+<!--<script type="text/javascript" src="./scripts/linkedlist.js"></script>-->
+<script type="text/javascript" src="https://raw.github.com/beersbr/ListJS/master/linkedlist.js"></script>
+<script type="text/javascript" src="./scripts/common.js"></script>
+<script type="text/javascript" src="./scripts/keyhandler.js"></script>
+
+<script type="text/javascript">
+
+function Entity(args)
+{
+    if(args == undefined) args = {};
+
+    // coordinates
+    this._x = args.x || 0;
+    this._y = args.y || 0;
+    this.w = args.w || 0;
+    this.h = args.h || 0;
+
+    // the center
+    this.cx = this._x + (this.w/2);
+    this.cy = this._y + (this.h/2);
+
+    // this is for debugging purposes
+    this.color = args.color || "rgb(255 ,255, 255)";
+
+    // acceleration
+    this.ax = args.ax || 0;
+    this.ay = args.ay || 0;
+
+    // setters for manipulating the center without having to set it each time
+    Object.defineProperty(this, "x", {
+        enumerable: true,
+        configurable: true,
+        set: function(v){
+            this._x = v;
+            this.cx = this._x + (this.w/2);
+        },
+        get: function(){
+            return this._x;
+        }
+    })
+
+    Object.defineProperty(this, "y", {
+        enumerable: true,
+        configurable: true,
+        set: function(v){
+            this._y = v;
+            this.cy = this._y + (this.h/2);
+        },
+        get: function(){
+            return this._y;
+        }
+
+    })
+
+    // maintain a list of all the entities that exist in the game.
+    if(Entity.entities == undefined)
+        Entity.entities = [];
+
+    if(Entity.entity_list == undefined)
+        Entity.entity_list = new List.List();
+
+    var obj = args.child || this;
+
+    Entity.entities.push(obj);
+    Entity.entity_list.push(obj);
+
+    // quick collision check
+    Entity.colliding = function(e1, e2)
+    {
+        if(e1.x > e2.x+e2.w) return false;
+        if(e1.y > e2.y+e2.h) return false;
+        if(e1.x+e1.w < e2.x) return false;
+        if(e1.y+e1.h < e2.y) return false;
+
+        return true;
+    }
+
+    // Checks collision against every entity created. If the given
+    // entity is colliding with another entity then the collision
+    // target is returned. If there is no collision at the end of the
+    // list then false is returned.
+//    Entity.colliding_with = function(e)
+//    {
+//        for(var i = 0; i < Entity.entities.length; i++)
+//        {
+//            var oper = Entity.entities[i];
+//            if(oper == e) continue;
+//
+//            if(Entity.colliding(e, oper)) return oper;
+//        }
+//        return null;
+//    }
+
+    Entity.colliding_with = function(e)
+    {
+        var colliding = null;
+        Entity.entity_list.eachValue(function(v){
+            if(v == e) return;
+
+            if(Entity.colliding(e, v)) colliding = v;
+        });
+
+        return colliding;
+    }
+
+    this.Draw = function(){}
+    this.Update = function(){}
+
+}
+
+function Block(args)
+{
+    if(args == undefined) args = {};
+
+    args.child = this;
+
+    args.w = 50;
+    args.h = 20;
+
+    Extend(this, Entity, args);
+
+    this.image = GLOBAL.block_images.mapped_images[Math.randomInt(0, GLOBAL.block_images.mapped_images.length-1)];
+    this.color = new Color(Math.randomInt(20, 255), Math.randomInt(20, 255), Math.randomInt(20, 255));
+    this.dead = false;
+    this.dying = false;
+
+    this.fade_time_start = null;
+    this.fade_time_elapsed = null;
+    this.fade_time = 0.25;
+
+    this.Draw = function()
+    {
+
+        GLOBAL.GameCanvas.context.save();
+        GLOBAL.GameCanvas.context.drawImage(this.image, this.x, this.y);
+
+        if(this.dying)
+        {
+            var ratio = this.fade_time_elapsed/this.fade_time;
+
+            GLOBAL.GameCanvas.context.fillStyle = "rgba(0, 0, 0, "+ 0.0 +")";
+            GLOBAL.GameCanvas.context.fillRect(this.x, this.y, this.w, this.h);
+        }
+        GLOBAL.GameCanvas.context.restore();
+    }
+
+    this.Update = function(time)
+    {
+        if(this.dying == true)
+        {
+            this.fade_time_elapsed = +new Date();
+            this.fade_time_elapsed = this.fade_time_elapsed/1000 - this.fade_time_start/1000;
+
+            if(this.fade_time_elapsed > this.fade_time)
+                this.dead = true;
+
+            this.x += this.ax;
+            this.y += this.ay;
+        }
+
+        if(this.dead == true)
+        {
+            Entity.entity_list.removeValue(this);
+
+//            var idx = Entity.entities.indexOf(this);
+//            Entity.entities.splice(idx, 1);
+        }
+        return;
+    }
+
+    this.Die = function(move_x, move_y)
+    {
+        this.fade_time_start = +new Date();
+        this.dying = true;
+
+        this.ax = move_x;
+        this.ay = move_y;
+
+        return;
+    }
+}
+
+
+// states for control
+PLAYING = 1;
+PAUSED  = 2;
+LOADING = 4;
+
+// Menu states
+INGAME = 1000;
+MENU1 = 1001;
+
+GLOBAL = {};
+GLOBAL.last_time = 0.0;
+GLOBAL.current_time = 0.0;
+
+GLOBAL.block_images = new CImage("./img/blocks.png", {
+    map_width: 50,
+    map_height: 20
+});
+
+function game(time)
+{
+    if(GLOBAL.keyboard.keyPressed("p"))
+    {
+        GLOBAL.state = PAUSED;
+        console.log("paused");
+    }
+
+//    for(var i = 0; i < Entity.entities.length; i++)
+//    {
+//        Entity.entities[i].Draw();
+//        Entity.entities[i].Update();
+//    }
+
+    Entity.entity_list.eachValue(function(entity){
+        entity.Draw();
+        entity.Update();
+    });
+}
+
+function paused(time)
+{
+    // update
+    if(GLOBAL.keyboard.keyPressed("p"))
+        GLOBAL.state = PLAYING;
+
+    var iter = Math.abs(Math.cos(GLOBAL.current_time / 500));
+
+    // draw
+    GLOBAL.GameCanvas.context.save()
+    GLOBAL.GameCanvas.context.font = "30px Geneva";
+    GLOBAL.GameCanvas.context.fillStyle = "rgba(255, 255, 255, "+ iter +")";
+    GLOBAL.GameCanvas.context.fillText("Paused", 350, 300);
+    GLOBAL.GameCanvas.context.restore();
+}
+
+function loading(time)
+{
+    console.log("Loading");
+    if(GLOBAL.block_images.loaded == true)
+       GLOBAL.state = PLAYING;
+
+    GLOBAL.GameCanvas.context.save();
+    GLOBAL.GameCanvas.context.font = "30px Geneva";
+    GLOBAL.GameCanvas.context.fillStyle = "rgb(255, 255, 255)";
+    GLOBAL.GameCanvas.context.fillText("Loading...", 340, 300);
+    GLOBAL.GameCanvas.context.restore();
+}
+
+// this is the main function
+function GameLoop()
+{
+    var time = 0.0;
+    GLOBAL.last_time = GLOBAL.current_time;
+    GLOBAL.current_time = +new Date();
+    time = GLOBAL.current_time - GLOBAL.last_time;
+
+    // this is the main dispatcher that will point the program
+
+    // in the right direction.
+    GLOBAL.GameCanvas.context.clearRect(0, 0, 800, 600);
+
+    switch(GLOBAL.state)
+    {
+        case(LOADING):
+            loading(time);
+            break;
+        case(PLAYING):
+            game(time);
+            break;
+
+        case(PAUSED):
+            paused(time);
+            break;
+
+        default:
+            throw "Game does not have a state set.";
+    }
+
+    GLOBAL.keyboard.cleaner();
+    requestAnimFrame(GameLoop);
+}
+
+window.onload = function(e)
+{
+//    console.log("loaded: ", e);
+    GLOBAL.GameCanvas = new Canvas({
+        "parent_element": document.getElementById("torso")
+    });
+
+    GLOBAL.keyboard = new KeyboardHandler();
+
+    GLOBAL.state = LOADING;
+
+    GLOBAL.paddle = new Entity({
+        color: "rgb(255, 255, 255)",
+        x: 375,
+        y: 575,
+        w: 50,
+        h: 15
+    });
+
+    GLOBAL.ball = new Entity({
+        color: "rgb(128, 255, 0)",
+        x: 395,
+        y: 250,
+        w: 10,
+        h: 10,
+        ay: 2.9
+
+    });
+
+    GLOBAL.blocks = [];
+    for(var i = 0; i < 60; i++)
+    {
+        GLOBAL.blocks = new Block({
+            x: 135 + (i%10) * 55,
+            y: 100 + (Math.floor(i/10)*25)
+        })
+    }
+
+    GLOBAL.ball.Draw = function(){
+        GLOBAL.GameCanvas.context.save();
+        GLOBAL.GameCanvas.context.fillStyle = this.color;
+        GLOBAL.GameCanvas.context.fillRect(this.x, this.y, this.w, this.h);
+        GLOBAL.GameCanvas.context.restore();
+    }
+
+    GLOBAL.ball.Update = function()
+    {
+        var target = Entity.colliding_with(this);
+        var angle = VectorAngle(GLOBAL.paddle.cx, GLOBAL.paddle.cy, this.cx, this.cy);
+
+        if(target)
+        {
+            if(target == GLOBAL.paddle)
+            {
+                var dx = this.cx - target.cx,
+                    dy = this.cy - target.cy,
+                    hyp = Math.sqrt(dx*dx + dy*dy),
+                    cos = dx/hyp,
+                    sin = dy/hyp,
+                    sign_mod = ((-1 * cos) / (cos)) || 1;
+
+                // move the ball out of the target
+                var dist_x = (this.w/2 + target.w/2),
+                    dist_y = (this.h/2 + target.h/2),
+                    d_x = this.cx - target.cx,
+                    d_y = this.cy - target.cy,
+                    to_move_x = dist_x - Math.abs(d_x),
+                    to_move_y = dist_y - Math.abs(d_y);
+
+                if(to_move_x < to_move_y)
+                {
+                    var change = to_move_x / (-1 * to_move_x) * to_move_x;
+                    this.x += change + target.ax;
+                    this.ax += target.ax;
+                }
+                else
+                {
+                    this.y += to_move_y * -1;
+                }
+
+                this.ax = (cos/1.5) * 2.9 + target.ax;
+                this.ay = (sin/1.5) * 2.9;
+            }
+
+            if(target.constructor == Block)
+            {
+                var dist_x = this.w/2 + target.w/2,
+                    dist_y = this.h/2 + target.h/2;
+
+                var overlap_x = this.cx - target.cx,
+                    overlap_y = this.cy - target.cy;
+
+                var collision_distance_x = dist_x - Math.abs(overlap_x),
+                    collision_distance_y = dist_y - Math.abs(overlap_y);
+
+                // start block dying animation
+                target.Die(this.ax, this.ay);
+
+                if(collision_distance_x > collision_distance_y)
+                {
+                    this.ay *= -1;
+                    var change = collision_distance_y * (overlap_y < 0 ? -1 : 1);
+                    this.y += change;
+                }
+                else
+                {
+                    this.ax *= -1;
+                    var change = collision_distance_x * (overlap_x < 0 ? -1 : 1);
+                    this.x += change;
+                }
+            }
+
+        }
+
+        // bounce off walls
+        if(this.cy < 0)
+            this.ay *= -1;
+
+        if(this.cx < 0 || this.cx > 800)
+            this.ax *= -1;
+
+        if(this.cy > 610)
+        {
+            // reset();
+            this.x = 395;
+            this.y = 250;
+        }
+
+        this.y += this.ay;
+        this.x += this.ax;
+    }
+
+    GLOBAL.paddle.Draw = function(){
+        GLOBAL.GameCanvas.context.save();
+        GLOBAL.GameCanvas.context.fillStyle = this.color;
+        GLOBAL.GameCanvas.context.fillRect(this.x, this.y, this.w, this.h);
+        GLOBAL.GameCanvas.context.fillStyle = "rgb(0, 0, 255)";
+        GLOBAL.GameCanvas.context.fillRect(this.cx-2, this.cy-2, 4, 4);
+        GLOBAL.GameCanvas.context.restore();
+    }
+
+    GLOBAL.paddle.Update = function(){
+        if(GLOBAL.keyboard.keyIsDown("d")) // right
+        {
+            this.ax += 0.65;
+        }
+        if(GLOBAL.keyboard.keyIsDown("a")) // left
+        {
+            this.ax -= 0.65;
+        }
+
+        if((this.x + (this.w/2)) + this.ax > 800)
+        {
+            this.x = 800 - this.w/2;
+        }
+
+        if((this.x + (this.w/2)) + this.ax < 0)
+        {
+            this.x = 0 - this.w/2;
+        }
+
+        this.ax *= 0.91;
+        this.x += this.ax;
+
+    };
+
+    GLOBAL.current_time = +new Date();
+    requestAnimFrame(GameLoop);
+}
+
+</script>
+</head>
+<body>
+	<header>
+		<div class="inner">
+			<div class="left">
+				<a href="home"><h2>BrettBeers</h2>.com</a>
+				<ul>
+					<li><a href="blog">Blog</a> </li>
+					<li><a href="projects">Projects</a></li>
+					<li><a href="contact">Contact/Resume</a></li>
+					<li></li>
+				</ul>
+			</div>
+		</div>
+	</header>
+
+	<div class="content">
+		<div class="arm">
+		</div>
+		<div class="torso" id="torso">
+		</div>
+	</div>
+
+</body>
+</html>
